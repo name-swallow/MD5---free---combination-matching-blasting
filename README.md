@@ -5,19 +5,20 @@
 ![License](https://img.shields.io/badge/License-Free-green)
 ![Multiprocessing](https://img.shields.io/badge/Threads-30~120-red)
 
-一款基于多进程加速的MD5哈希碰撞破解工具，通过暴力枚举所有可能的字符组合快速匹配目标哈希值。
+An MD5 hash collision cracking tool accelerated by multi-processing. It quickly matches the target hash value by brute-forcing and enumerating all possible character combinations.
 
-## 功能特性
+## Features
 
-- 🚀 多进程加速处理（最高支持120线程）
-- 🔍 支持自定义字符集和密码长度范围
-- 📊 实时进度显示（基于tqdm）
-- ⚡ 智能批量处理（单次处理最高200万组合）
-- 🛡️ 安全的中断处理（Ctrl+C立即停止）
+- 🚀 Multi-processing acceleration (supports up to 120 threads)
+- 🔍 Supports custom character sets and password length ranges
+- 📊 Real-time progress display (based on tqdm)
+- ⚡ Intelligent batch processing (handles up to 2 million combinations at a time)
+- 🛡️ Secure interruption handling (stops immediately when Ctrl+C is pressed)
 
-## 安装使用
+## Installation and Usage
 
-### 依赖环境
+### Dependent Environment
 ```bash
 Python 3.8+ 
 pip install tqdm
+``` 

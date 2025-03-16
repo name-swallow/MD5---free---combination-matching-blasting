@@ -8,6 +8,7 @@ import hashlib
 from tqdm import tqdm
 import time
 import datetime
+import psutil  # 用于内存监控
 
 def print_swallow():
     """打印程序的ASCII艺术标题"""
@@ -28,23 +29,37 @@ def crack_worker(target_hash, chars, length_range, batch_size, progress_queue, r
             return
         password_iter = itertools.product(chars, repeat=length)
         progress_accumulator = 0
-        while not stop_event.is_set():
+        
+        while True:
+            if stop_event.is_set():
+                return
+            
             batch = list(itertools.islice(password_iter, batch_size))
             if not batch:
                 break
+
             passwords = [''.join(p) for p in batch]
             hashes = [hashlib.md5(p.encode()).hexdigest() for p in passwords]
-            if target_hash in hashes:
-                index = hashes.index(target_hash)
-                result_queue.put(passwords[index])
-                stop_event.set()
-                progress_queue.put(progress_accumulator + len(batch))
+
+            found = False
+            for idx, h in enumerate(hashes):
+                if h == target_hash:
+                    result_queue.put(passwords[idx])
+                    if not stop_event.is_set():
+                        progress_queue.put(progress_accumulator + len(batch))
+                    stop_event.set()
+                    found = True
+                    break
+            if found:
                 return
+
             progress_accumulator += len(batch)
             if progress_accumulator >= update_threshold:
-                progress_queue.put(progress_accumulator)
-                progress_accumulator = 0
-        if progress_accumulator > 0:
+                if not stop_event.is_set():
+                    progress_queue.put(progress_accumulator)
+                    progress_accumulator = 0
+
+        if progress_accumulator > 0 and not stop_event.is_set():
             progress_queue.put(progress_accumulator)
 
 class PasswordCracker:
@@ -55,12 +70,18 @@ class PasswordCracker:
         self.min_length = min_length
         self.max_length = max_length
         self.num_processes = min(num_processes, multiprocessing.cpu_count() * 2)  # 限制进程数
-        if self.num_processes == 120:
-            self.batch_size = 5000000 // self.num_processes  # ≈41666
-            self.update_threshold = 5000000 // self.num_processes  # ≈41666
+        
+        # 动态调整批次大小，基于内存可用性
+        mem_info = psutil.virtual_memory()
+        if mem_info.available < 2 * 1024 * 1024 * 1024:  # 如果可用内存小于2GB
+            self.batch_size = 10000
         else:
-            self.batch_size = 1000000 // self.num_processes  # 默认30个进程时 ≈33333
-            self.update_threshold = 1000000  # 每100万个组合更新
+            if self.num_processes == 120:
+                self.batch_size = 5000000 // self.num_processes  # ≈41666
+            else:
+                self.batch_size = 1000000 // self.num_processes  # 默认30个进程时 ≈33333
+        
+        self.update_threshold = 1000000  # 每100万个组合更新
         self.start_time = None
 
     def crack(self):
@@ -94,19 +115,22 @@ class PasswordCracker:
         completed = 0
         with tqdm(total=total_combinations, desc="Cracking Progress", dynamic_ncols=True) as pbar:
             while not stop_event.is_set():
+                # 优先检查结果队列
+                if not result_queue.empty():
+                    password = result_queue.get()
+                    print(f"\n[SUCCESS] Password found: {password}")
+                    stop_event.set()
+                    break
+
+                # 处理进度更新
                 try:
-                    increment = progress_queue.get(timeout=0.5)
+                    increment = progress_queue.get(timeout=0.1)
                     completed += increment
                     pbar.update(increment)
                 except queue.Empty:
                     pass
 
-                if not result_queue.empty():
-                    password = result_queue.get()
-                    print(f"\nPassword found: {password}")
-                    stop_event.set()
-                    break
-
+                # 更新剩余时间估计
                 elapsed_time = time.time() - self.start_time
                 if completed > 0:
                     estimated_total_time = elapsed_time / completed * total_combinations
@@ -116,19 +140,32 @@ class PasswordCracker:
                         'Remaining': str(datetime.timedelta(seconds=int(remaining_time)))
                     })
 
+                # 检查是否所有组合已尝试
                 if completed >= total_combinations:
                     break
 
+        # 终止所有子进程
         stop_event.set()
         for p in processes:
             p.terminate()
             p.join()
 
+        # 检查结果队列中是否有密码
+        password = None
+        max_retries = 3
+        for _ in range(max_retries):
+            try:
+                password = result_queue.get_nowait()
+                break
+            except queue.Empty:
+                time.sleep(0.2)
+
         elapsed_time = time.time() - self.start_time
-        if stop_event.is_set() and not result_queue.empty():
-            print(f"\nCracking completed successfully in {elapsed_time:.2f} seconds.")
+        if password is not None:
+            print(f"\n[SUCCESS] Password found: {password}")
+            print(f"Completed in {elapsed_time:.2f} seconds")
         else:
-            print(f"\nPassword not found within the given range. Took {elapsed_time:.2f} seconds.")
+            print(f"\n[FAIL] Password not found. Time used: {elapsed_time:.2f}s")
 
     def _signal_handler(self, sig, frame):
         """处理Ctrl+C信号"""
